@@ -47,6 +47,8 @@ public class Cypher {
     public KernelTransaction tx;
     @Context
     public Log log;
+    @Context
+    public TerminationGuard terminationGuard;
 
     @Procedure
     @Description("apoc.cypher.run(fragment, params) yield value - executes reading fragment with the given parameters")
@@ -89,7 +91,7 @@ public class Cypher {
             long time = System.currentTimeMillis();
             int row = 0;
             while (result.hasNext()) {
-                if (tx.getReasonIfTerminated()!=null) break;
+                terminationGuard.check();
                 queue.put(new RowResult(row++, result.next()));
             }
             if (addStatistics) {
@@ -164,7 +166,7 @@ public class Cypher {
         final String statement = withParamMapping(fragment, params.keySet());
         Collection<Object> coll = (Collection<Object>) value;
         return coll.parallelStream().flatMap((v) -> {
-            if (tx.getReasonIfTerminated()!=null) return Stream.of(MapResult.empty());
+            terminationGuard.check();
             Map<String, Object> parallelParams = new HashMap<>(params);
             parallelParams.replace(key, v);
             return api.execute(statement, parallelParams).stream().map(MapResult::new);
@@ -265,7 +267,7 @@ public class Cypher {
         for (Object o : coll) {
             partition.add(o);
             if (partition.size() == batchSize) {
-                if (tx.getReasonIfTerminated()!=null) return Stream.of(MapResult.empty());
+                terminationGuard.check();
                 futures.add(submit(api, statement, params, key, partition));
                 partition = new ArrayList<>(batchSize);
             }
@@ -331,9 +333,7 @@ public class Cypher {
 
         @Override
         public boolean tryAdvance(Consumer<? super T> action) {
-            if (tx.getReasonIfTerminated() != null) {
-                return false;
-            }
+            terminationGuard.check();
             if (isEnd()) return false;
             action.accept(entry);
             entry = poll();
